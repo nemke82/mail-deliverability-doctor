@@ -39,7 +39,7 @@ references/                 provider codes, record rules, per-MTA configuration
 tests/run.sh                offline tests on DNS fixtures and synthetic logs
 ```
 
-Needs bash, `dig` (bind-utils or dnsutils), `openssl` and `timeout`. Everything is
+Needs bash, `dig` (bind-utils or dnsutils), `openssl`, `curl` and `timeout`. Everything is
 read-only: no DNS, configuration or queue changes.
 
 ## Install

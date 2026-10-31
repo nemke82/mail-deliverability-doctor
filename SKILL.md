@@ -23,7 +23,7 @@ ask for delisting.
 
 ## Scripts
 
-All in `scripts/`, bash plus `dig` (bind-utils / dnsutils), `openssl`, `timeout`.
+All in `scripts/`, bash plus `dig` (bind-utils / dnsutils), `openssl`, `curl`, `timeout`.
 
 | Script | Run where | Purpose |
 |---|---|---|
