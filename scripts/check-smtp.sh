@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Read-only SMTP check of one mail server: connects, reads the banner, sends
-# EHLO and QUIT (no mail is sent), then tests STARTTLS and the certificate.
+# EHLO, NOOP and QUIT with curl (no mail is sent), then tests STARTTLS and the certificate.
 #
 # Usage: check-smtp.sh [-p PORT] [-e EHLO_NAME] HOST
 #   -p PORT   default 25 (use 587 for submission)
@@ -12,24 +12,6 @@ set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
-
-# Internal: the plain-text conversation, run under timeout in a child bash.
-if [ "${1:-}" = __talk ]; then
-  host=$2 port=$3 ehlo=$4
-  exec 3<>"/dev/tcp/$host/$port" || exit 3
-  while IFS= read -r -t 20 line <&3; do
-    line=${line%$'\r'}; echo "S: $line"
-    [[ $line =~ ^[0-9]{3}- ]] || break
-  done
-  printf 'EHLO %s\r\n' "$ehlo" >&3
-  while IFS= read -r -t 20 line <&3; do
-    line=${line%$'\r'}; echo "S: $line"
-    [[ $line =~ ^[0-9]{3}- ]] || break
-  done
-  printf 'QUIT\r\n' >&3
-  exec 3>&-
-  exit 0
-fi
 
 usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 port=25
@@ -53,13 +35,13 @@ add() { sev+=("$1"); msg+=("$2"); }
 
 echo "# SMTP check: $host:$port"
 echo
-conv=""
-# shellcheck disable=SC2016  # $1/$2 expand in the child shell
-if timeout 10 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" 2>/dev/null; then
-  conv=$(timeout 45 bash "$0" __talk "$host" "$port" "$ehlo" 2>/dev/null); rc=$?
-else
-  rc=$?
-fi
+command -v curl >/dev/null 2>&1 || mdd_die "curl not found"
+# curl speaks the SMTP dialogue for us: banner, EHLO, NOOP, QUIT. No mail is sent.
+scheme=smtp; insecure=()
+# Port 465 is TLS from the start; the certificate is judged separately below.
+[ "$port" = 465 ] && { scheme=smtps; insecure=(-k); }
+conv=$(curl -sv "${insecure[@]}" --connect-timeout 10 --max-time 40 -X NOOP \
+         "$scheme://$host:$port/$ehlo" 2>&1 >/dev/null | tr -d '\r' | sed -n 's/^< /S: /p'); rc=$?
 if [ $rc -ne 0 ] || [ -z "$conv" ]; then
   echo "Could not talk SMTP to $host:$port (exit $rc)."
   add FAIL "No SMTP connection to $host:$port. Either the server is down/firewalled or this machine cannot open outbound port $port (common on cloud VMs and home ISPs): try from another host."
@@ -76,12 +58,12 @@ else
       [ -n "$ptr" ] && [ "${ptr,,}" != "$bname" ] && add INFO "Banner name $bname differs from the PTR of $a ($ptr)."
     done
   fi
-  grep -qi '^S: 250[- ]STARTTLS' <<< "$conv" || add FAIL "STARTTLS is not offered: mail to this server travels unencrypted, and Gmail marks it with a red lock."
+  [ "$port" = 465 ] || grep -qi '^S: 250[- ]STARTTLS' <<< "$conv" || add FAIL "STARTTLS is not offered: mail to this server travels unencrypted, and Gmail marks it with a red lock."
   sz=$(sed -nE 's/^S: 250[- ]SIZE ([0-9]+).*/\1/p' <<< "$conv" | head -1)
   [ -n "$sz" ] && (( sz > 0 && sz < 10485760 )) && add INFO "SIZE limit is $((sz / 1048576)) MB; larger messages bounce."
 fi
 
-if [ $rc -eq 0 ] && grep -qi '^S: 250[- ]STARTTLS' <<< "$conv" && command -v openssl >/dev/null 2>&1; then
+if [ $rc -eq 0 ] && { [ "$port" = 465 ] || grep -qi '^S: 250[- ]STARTTLS' <<< "$conv"; } && command -v openssl >/dev/null 2>&1; then
   echo
   echo "## TLS"
   echo
